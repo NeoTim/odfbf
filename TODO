@@ -1,0 +1,5 @@
+1. Work with AES encrypted ODF files.
+
+2. Support custom numer of iterations.
+
+3. Work with ODF files using SHA-256.
