@@ -3,14 +3,14 @@
 """Program to check a password against encrypted ODF files.
 Inspired by http://ringlord.com/odfjlib.html and oodecr."""
 
-import xml.etree.ElementTree
+from xml.etree.ElementTree import ElementTree
+from Crypto.Cipher import Blowfish
+from Crypto.Cipher import AES
 import zipfile
 import sys
 import base64
-import binascii
 import hashlib
 import pbkdf2
-import zlib
 
 if __name__ == "__main__":
 
@@ -31,13 +31,13 @@ if __name__ == "__main__":
         print >> sys.stderr, "%s is not an OpenOffice file!" % sys.argv[1]
         sys.exit(3)
 
-    from xml.etree.ElementTree import ElementTree
     tree = ElementTree()
     tree.parse(mf)
     r = tree.getroot()
     elements = list(r.iter())
 
     is_encrypted = False
+    key_size = 16
     for i in range(0, len(elements)):
         element = elements[i]
         if element.get("{urn:oasis:names:tc:opendocument:xmlns:manifest:1.0}full-path") == "content.xml":
@@ -63,7 +63,9 @@ if __name__ == "__main__":
                 data = element.get("{urn:oasis:names:tc:opendocument:xmlns:manifest:1.0}iteration-count")
                 if data:
                     iteration_count = data
-
+                data = element.get("{urn:oasis:names:tc:opendocument:xmlns:manifest:1.0}key-size")
+                if data:
+                    key_size = data
 
     if not is_encrypted:
         print >> sys.stderr, "%s is not an encrypted OpenOffice file!" % sys.argv[1]
@@ -79,23 +81,29 @@ if __name__ == "__main__":
         print >> sys.stderr, "%s is not an encrypted OpenOffice file, content.xml missing!" % sys.argv[1]
         sys.exit(5)
 
-    pwdHash = hashlib.sha1(password).digest()
-    key = pbkdf2.pbkdf(pwdHash, salt, 1024, 16)
-    from Crypto.Cipher import Blowfish
-    bf = Blowfish.new(key=key, mode=Blowfish.MODE_CFB, IV=iv, segment_size=64)
-    pt = bf.decrypt(content)
-    cchecksum = hashlib.sha1(pt[0:1024]).digest()
+    if algorithm_name.find("Blowfish CFB") > -1:
+        pwdHash = hashlib.sha1(password).digest()
+        key = pbkdf2.pbkdf(pwdHash, salt, int(iteration_count), int(key_size))
+        bf = Blowfish.new(key=key, mode=Blowfish.MODE_CFB, IV=iv, segment_size=64)
+        pt = bf.decrypt(content[0:1024])
+
+    elif algorithm_name.find("aes256-cbc") > -1:
+        pwdHash = hashlib.sha256(password).digest()
+        key = pbkdf2.pbkdf(pwdHash, salt, int(iteration_count), int(key_size))
+        aes = AES.new(key=key, mode=AES.MODE_CBC, IV=iv)
+        pt = aes.decrypt(content)
+    else:
+        print >> sys.stderr, "%s uses un-supported encryption!" % sys.argv[1]
+        sys.exit(6)
+
+    if checksum_type.find("SHA1") > -1:
+        cchecksum = hashlib.sha1(pt[0:1024]).digest()
+    else:
+        cchecksum = hashlib.sha256(pt[0:1024]).digest()
+
     if cchecksum == checksum:
-        # inflate pt
-        try:
-            ipt = zlib.decompress(pt, -15)
-        except:
-            print "Can't inflate, Wrong Password?"
-            sys.exit(6)
         print "Right Password!"
         sys.exit(0)
     else:
         print "Wrong Password!"
         sys.exit(7)
-
-
